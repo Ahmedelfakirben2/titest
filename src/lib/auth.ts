@@ -16,6 +16,7 @@ const SCOPES = [
 ];
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  secret: process.env.AUTH_SECRET, // Use the secret from environment variables
   providers: [
     MicrosoftEntraID({
       clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_CLIENT_ID,
@@ -27,6 +28,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           scope: SCOPES.join(' '),
         },
       },
+      // Explicitly define the redirect URI based on AUTH_URL if needed,
+      // though NextAuth usually handles this if AUTH_URL is set.
+      // Consider adding this if issues persist:
+      // profile(profile) {
+      //   // You can customize the user object returned here
+      //   return {
+      //     id: profile.sub, // Or profile.oid
+      //     name: profile.name,
+      //     email: profile.email || profile.preferred_username,
+      //     image: null, // Or map from profile picture if available/needed
+      //     userPrincipalName: profile.preferred_username,
+      //     oid: profile.oid
+      //   };
+      // }
     }),
   ],
   callbacks: {
@@ -34,18 +49,27 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     // or updated (i.e., whenever a session is accessed in the client).
     async jwt({ token, account, profile }) {
       // Persist the access_token and refresh_token to the token right after signin
-      if (account) {
+      if (account && profile) {
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token; // Store the refresh token
-        token.expiresAt = account.expires_at; // Store the expiry time
+        token.expiresAt = account.expires_at; // Store the expiry time (in seconds since epoch)
         // Add user's object id (oid) or subject (sub) from the profile for Graph API calls
         token.userId = profile?.oid || profile?.sub;
-        token.userPrincipalName = profile?.preferred_username || profile?.email; // Often needed for Graph filters
+        // Use preferred_username for UPN, fall back to email
+        token.userPrincipalName = profile?.preferred_username || profile?.email;
+        token.error = undefined; // Clear previous errors on successful sign-in/refresh
+      } else if (Date.now() / 1000 < (token.expiresAt as number)) {
+        // If the access token has not expired yet, return it
+        return token;
+      } else {
+        // If the access token has expired, try to refresh it (optional, implement if needed)
+        // This requires careful handling of the refresh token and API calls to the provider.
+        // For now, we'll let it expire and potentially require re-login.
+        console.log('Access token expired, refresh needed (refresh logic not implemented).');
+        // You might want to set an error or clear the token here if refresh fails or isn't implemented
+        // token.error = "RefreshTokenExpired"; // Example error state
       }
 
-      // TODO: Implement token refresh logic if needed, especially for backend usage.
-      // The current setup primarily focuses on client-side access during the session.
-      // Refresh logic is complex and depends on how/where the token is used long-term.
 
       return token;
     },
@@ -56,6 +80,21 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       session.userId = token.userId as string;
       session.userPrincipalName = token.userPrincipalName as string;
       session.error = token.error as string | undefined; // Pass potential errors
+
+      // Add user id to the session user object
+      if (token.userId && session.user) {
+        session.user.id = token.userId;
+      }
+       // Ensure email is populated if available in the token
+       if (token.email && session.user) {
+        session.user.email = token.email;
+       }
+      // Ensure name is populated if available in the token
+      if (token.name && session.user) {
+          session.user.name = token.name;
+      }
+
+
       return session;
     },
   },

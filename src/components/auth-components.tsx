@@ -18,9 +18,20 @@ export function SignInButton() {
         // This catch block might not capture redirect-related fetch errors effectively,
         // but can catch other potential issues with the signIn promise itself.
         console.error("Client-side error during signIn initiation:", error);
-        // You could display a user-friendly message here using a state and Alert component
-        // Example: Display an alert or use a toast notification
-         alert(`Sign-in initiation failed: ${error.message || 'Unknown error'}. Check console for details. Ensure the AUTH_URL in .env matches your application's URL (${process.env.NEXT_PUBLIC_AUTH_URL || 'http://localhost:9002'}).`);
+        // Display a user-friendly message
+        // Determine the likely cause based on the environment
+        const authUrl = process.env.NEXT_PUBLIC_AUTH_URL || 'NOT_SET';
+        let errorMessage = `Sign-in initiation failed: ${error.message || 'Unknown error'}. \
+Check the browser's developer console (Network tab) for more details. \
+Possible causes include network connectivity issues, CORS problems, or incorrect configuration.`;
+
+        if (error.message === 'Failed to fetch') {
+           errorMessage += `\n\nSpecifically, 'Failed to fetch' often means the browser could not reach the authentication endpoint. \
+Ensure the AUTH_URL environment variable is correctly set to your application's public URL. \
+Currently configured NEXT_PUBLIC_AUTH_URL (for client-side reference): ${authUrl}. Verify this matches your actual deployment URL and is reachable.`;
+        }
+
+        alert(errorMessage);
       });
   };
 
@@ -48,3 +59,4 @@ export function SignOutButton() {
     </Button>
   );
 }
+
