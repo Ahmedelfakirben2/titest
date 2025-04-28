@@ -19,7 +19,8 @@ export function SignInButton() {
         // but can catch other potential issues with the signIn promise itself.
         console.error("Client-side error during signIn initiation:", error);
         // You could display a user-friendly message here using a state and Alert component
-        alert(`Sign-in initiation failed: ${error.message}. Check console for details.`);
+        // Example: Display an alert or use a toast notification
+         alert(`Sign-in initiation failed: ${error.message || 'Unknown error'}. Check console for details. Ensure the AUTH_URL in .env matches your application's URL (${process.env.NEXT_PUBLIC_AUTH_URL || 'http://localhost:9002'}).`);
       });
   };
 
