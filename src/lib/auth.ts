@@ -20,10 +20,18 @@ const SCOPES = [
   'offline_access',
 ];
 
-// Validate essential environment variables
-if (!process.env.AUTH_SECRET) {
-  // It's often better to throw an error during build/startup for critical missing variables
-  throw new Error('CRITICAL: Missing AUTH_SECRET environment variable');
+// --- Environment Variable Validation ---
+if (!process.env.AUTH_SECRET) { // Check if AUTH_SECRET is missing entirely
+  // Critical: Application cannot run securely without a secret.
+  throw new Error(`
+    -------------------------------------------------------------------
+    CRITICAL: Missing AUTH_SECRET environment variable.
+    Authentication cannot function securely without it.
+    Please generate a strong secret (e.g., openssl rand -base64 32)
+    and add it to your .env file.
+    Read more: https://errors.authjs.dev#missingsecret
+    -------------------------------------------------------------------
+  `);
 } else if (process.env.AUTH_SECRET.length < 32) {
   console.warn(`
     -------------------------------------------------------------------
@@ -37,48 +45,58 @@ if (!process.env.AUTH_SECRET) {
 if (!process.env.AUTH_MICROSOFT_ENTRA_ID_CLIENT_ID) {
   throw new Error('CRITICAL: Missing AUTH_MICROSOFT_ENTRA_ID_CLIENT_ID environment variable');
 }
-if (!process.env.AUTH_MICROSOFT_ENTRA_ID_CLIENT_SECRET) {
-  throw new Error('CRITICAL: Missing AUTH_MICROSOFT_ENTRA_ID_CLIENT_SECRET environment variable');
+if (!process.env.AUTH_MICROSOFT_ENTRA_ID_CLIENT_SECRET || process.env.AUTH_MICROSOFT_ENTRA_ID_CLIENT_SECRET === "YOUR_CLIENT_SECRET_HERE") {
+  throw new Error(`
+    -------------------------------------------------------------------
+    CRITICAL: Missing or placeholder AUTH_MICROSOFT_ENTRA_ID_CLIENT_SECRET environment variable.
+    Please obtain the client secret from your Azure AD App Registration
+    and set it securely in your .env file (replace "YOUR_CLIENT_SECRET_HERE").
+    -------------------------------------------------------------------
+  `);
 }
 if (!process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID) {
   throw new Error('CRITICAL: Missing AUTH_MICROSOFT_ENTRA_ID_TENANT_ID environment variable');
 }
 
-// Explicitly set AUTH_URL using NEXT_PUBLIC_AUTH_URL for client-side availability if needed,
-// but primarily use AUTH_URL for server-side configuration.
-const authUrl = process.env.AUTH_URL || process.env.NEXT_PUBLIC_AUTH_URL;
+// Explicitly set AUTH_URL using AUTH_URL environment variable.
+const authUrl = process.env.AUTH_URL;
 
 if (!authUrl) {
-    // Log a warning but allow startup for simpler local dev setups where NextAuth might infer localhost
-    console.warn(`
+    // Critical: Auth URL is required for redirects to work correctly.
+    throw new Error(`
       -------------------------------------------------------------------
-      WARNING: The AUTH_URL environment variable is not set.
+      CRITICAL: The AUTH_URL environment variable is not set.
       NextAuth.js requires AUTH_URL to function reliably, especially for OAuth redirects.
-      Defaulting might work for some scenarios (like http://localhost:9002), but it's
-      highly recommended to set it explicitly in your .env file for clarity and production.
+      Please set it explicitly in your .env file.
       Example: AUTH_URL=http://localhost:9002 (local dev)
                AUTH_URL=https://your-app-domain.com (production)
-      Ensure this URL matches the Redirect URI configured in your Azure AD App Registration.
+      Ensure this URL exactly matches the base of the Redirect URI configured
+      in your Azure AD App Registration (e.g., AUTH_URL + /api/auth/callback/microsoft-entra-id).
       -------------------------------------------------------------------
     `);
-    // If you want to enforce it, throw an error here instead:
-    // throw new Error('CRITICAL: Missing AUTH_URL environment variable');
+} else {
+    console.log(`[Auth Config] Using AUTH_URL: ${authUrl}`);
+    // Validate the URL format slightly
+    try {
+        new URL(authUrl);
+    } catch (e) {
+        throw new Error(`CRITICAL: Invalid AUTH_URL environment variable: ${authUrl}. Please provide a valid URL.`);
+    }
 }
 
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   // Use the AUTH_URL from environment variables. Crucial for OAuth redirects.
-  // If not set, NextAuth attempts to infer, which can be unreliable.
   ...(authUrl && { url: new URL(authUrl) }),
 
   // Set the base path if your auth routes are different from the default /api/auth
   // basePath: '/api/auth', // Default, usually not needed unless customized
 
   // Trust the host header only if provided by a trusted proxy (e.g., Vercel, Cloud Run)
-  // Set to true if your deployment environment sets X-Forwarded-Host correctly.
-  // Using AUTH_URL explicitly (as done above) is generally safer and preferred.
-  // trustHost: process.env.NODE_ENV !== 'development', // Example: trust in production
-  trustHost: true, // Simpler approach, relies on proxy correctly setting headers or explicit AUTH_URL
+  // Setting trustHost to true can be a security risk if not behind a properly configured proxy.
+  // Relying on the explicit AUTH_URL is generally safer.
+  // trustHost: process.env.NODE_ENV !== 'development', // Example: trust in production if proxy setup is known
+  trustHost: true, // Keep true for cloud environments like Cloud Workstations, assuming proxy handles headers
 
   secret: process.env.AUTH_SECRET, // Use the strong secret from environment variables
 
@@ -102,25 +120,35 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       },
       // IMPORTANT: Ensure the Redirect URI in your Azure AD App Registration
       // exactly matches the callback URL NextAuth uses.
-      // Example with AUTH_URL=http://localhost:9002:
-      // http://localhost:9002/api/auth/callback/microsoft-entra-id
-      // Example with AUTH_URL=https://your-app.com:
-      // https://your-app.com/api/auth/callback/microsoft-entra-id
-      // Check NextAuth logs or network requests if you encounter redirect URI mismatch errors.
+      // Based on AUTH_URL=${authUrl}, the expected Redirect URI is:
+      // ${authUrl}/api/auth/callback/microsoft-entra-id
+      // Verify this in Azure Portal -> App Registrations -> [Your App] -> Authentication -> Web Redirect URIs
+      // Log the expected callback URL for easy verification:
+      // callbackUrl: `${authUrl}/api/auth/callback/microsoft-entra-id`, // This isn't a config option, just for logging context
+      // Check NextAuth logs or browser network requests if you encounter redirect URI mismatch errors.
+      profile(profile, tokens) {
+         // console.log("[Auth Profile Callback] Profile:", profile);
+         // console.log("[Auth Profile Callback] Tokens:", tokens); // Contains access_token, id_token etc.
+         // Ensure user has essential details for the app
+         const userEmail = profile.email || profile.preferred_username;
+         if (!userEmail) {
+            console.error("[Auth Profile Callback] Error: User profile is missing email and preferred_username.", profile);
+            // Throwing an error here might block login. Consider returning a minimal user object
+            // or logging extensively and allowing login if appropriate for your use case.
+            // throw new Error("User profile is missing required email information.");
+         }
+         return {
+           // Map standard fields
+           id: profile.sub || profile.oid, // Use 'sub' (subject) or 'oid' (object ID) as unique ID
+           name: profile.name,
+           email: userEmail,
+           image: null, // You could potentially map a profile picture URL if available in profile data
 
-      // Optional: Customize the profile data mapped to the NextAuth user object
-      // profile(profile, tokens) {
-      //   console.log("Microsoft Entra ID Profile:", profile);
-      //   console.log("Microsoft Entra ID Tokens:", tokens); // Contains access_token, id_token etc.
-      //   return {
-      //     id: profile.sub || profile.oid, // Use 'sub' (subject) or 'oid' (object ID) as unique ID
-      //     name: profile.name,
-      //     email: profile.email || profile.preferred_username, // Use email or UPN
-      //     image: null, // You could potentially map a profile picture URL if available in profile data
-      //     userPrincipalName: profile.preferred_username, // Store UPN if needed
-      //     // Add any other custom fields you need from the profile
-      //   };
-      // }
+           // Custom fields needed by the application (extend the User interface in next-auth.d.ts)
+           userPrincipalName: profile.preferred_username || userEmail, // Store UPN if needed
+           // Add any other custom fields you need from the profile
+         };
+       }
     }),
     // Add other providers here if needed (e.g., Google, GitHub)
   ],
@@ -128,11 +156,11 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     // The jwt callback is invoked when a JWT is created (on sign-in)
     // or updated (when session accessed client-side, or token needs refresh).
     async jwt({ token, user, account, profile, isNewUser }) {
-       // console.log("JWT Callback Triggered:", { token, user, account, profile, isNewUser });
+       // console.log("[Auth JWT Callback] Triggered:", { token: { userId: token.userId, error: token.error, hasAccessToken: !!token.accessToken }, user, accountProvider: account?.provider, profileSub: profile?.sub, isNewUser });
 
       // Initial sign-in: Persist essential info from account and profile to the JWT
       if (account && profile) {
-        // console.log("JWT Callback - Initial Sign-in or Token Refresh");
+        // console.log("[Auth JWT Callback] Initial Sign-in or Token Refresh (account present)");
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token; // Crucial for refreshing access token
         // account.expires_at is in seconds since epoch. Convert to milliseconds.
@@ -145,25 +173,25 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         // You can also add roles or other claims from the profile/id_token if needed
         // token.roles = profile?.roles; // Example if roles are in the profile
-         // console.log("JWT after initial population:", token);
+         // console.log("[Auth JWT Callback] JWT populated on sign-in:", { userId: token.userId, expiresAt: token.expiresAt ? new Date(token.expiresAt).toISOString() : 'N/A', hasAccessToken: !!token.accessToken });
       }
 
        // Check if the current access token is still valid
        // Add a buffer (e.g., 60 seconds) to attempt refresh *before* it actually expires
        const bufferTime = 60 * 1000; // 60 seconds
-       const isTokenValid = token.expiresAt && (Date.now() < (token.expiresAt - bufferTime));
+       const isTokenExpired = !token.expiresAt || (Date.now() >= (token.expiresAt - bufferTime));
 
-       if (isTokenValid) {
-           // console.log("JWT Callback - Token is still valid.");
+       if (!isTokenExpired) {
+           // console.log("[Auth JWT Callback] Token is still valid.");
            return token; // Return the existing token without modification
        }
 
        // Access token has expired (or is close to expiring) or needs refresh.
-       // console.log("JWT Callback - Token expired or needs refresh.");
+       // console.log("[Auth JWT Callback] Token expired or needs refresh.");
 
        // Check if we have a refresh token to attempt refresh
        if (!token.refreshToken) {
-           console.error("JWT Callback - Access token expired, but no refresh token available.");
+           console.error("[Auth JWT Callback] Access token expired, but no refresh token available.");
            token.error = "MissingRefreshToken";
            // Optionally clear expired access token
            delete token.accessToken;
@@ -172,7 +200,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
        // --- Attempt Token Refresh ---
        try {
-           // console.log("JWT Callback - Attempting token refresh...");
+           // console.log("[Auth JWT Callback] Attempting token refresh...");
            const response = await fetch(`https://login.microsoftonline.com/${process.env.AUTH_MICROSOFT_ENTRA_ID_TENANT_ID}/oauth2/v2.0/token`, {
                method: 'POST',
                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -188,17 +216,18 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
            const refreshedTokens = await response.json();
 
            if (!response.ok) {
-               console.error("JWT Callback - Token refresh failed:", refreshedTokens);
+               console.error("[Auth JWT Callback] Token refresh failed:", { status: response.status, body: refreshedTokens });
                // More specific error handling based on 'refreshedTokens.error' if needed
                 token.error = refreshedTokens.error || "RefreshTokenError"; // e.g., 'invalid_grant'
-                // Clear potentially invalid tokens
+                // Clear potentially invalid tokens - important if refresh token is rejected
                 delete token.accessToken;
-                delete token.refreshToken; // If refresh fails, the refresh token might also be invalid
+                delete token.refreshToken;
                 delete token.expiresAt;
-               throw new Error(`Token refresh failed with status ${response.status}`);
+               // throw new Error(`Token refresh failed with status ${response.status}`); // Don't throw, return error in token
+               return token; // Return token with error state
            }
 
-           // console.log("JWT Callback - Token refresh successful.");
+           // console.log("[Auth JWT Callback] Token refresh successful.");
 
            // Update the token with the new values from the refresh response
            token.accessToken = refreshedTokens.access_token;
@@ -208,13 +237,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
            token.expiresAt = Date.now() + (refreshedTokens.expires_in * 1000);
            token.error = undefined; // Clear error on successful refresh
 
-            // console.log("JWT after successful refresh:", token);
+           // console.log("[Auth JWT Callback] JWT after successful refresh:", { userId: token.userId, newExpiresAt: new Date(token.expiresAt).toISOString(), hasAccessToken: !!token.accessToken });
            return token;
 
-       } catch (error) {
-           console.error("JWT Callback - Error during token refresh:", error);
+       } catch (error: any) {
+           console.error("[Auth JWT Callback] Error during token refresh fetch:", error);
            // Error is already set in the 'if (!response.ok)' block if it was an API error
-           // If the fetch itself failed, set a generic error
+           // If the fetch itself failed (e.g., network issue), set a generic error
             if (!token.error) {
                 token.error = "RefreshTokenFetchError";
             }
@@ -237,13 +266,22 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
       // Ensure the user object in the session has the correct ID and other details
       if (session.user) {
-        session.user.id = token.userId as string | undefined ?? null; // Use the ID from JWT
+        session.user.id = token.userId as string | undefined ?? session.user.id ?? null; // Use JWT ID, fallback to existing session ID
          // Ensure email and name from token are reflected if available
-         session.user.email = token.email ?? session.user.email;
+         session.user.email = (token.userPrincipalName || token.email) as string | undefined ?? session.user.email; // Prefer UPN/email from token
          session.user.name = token.name ?? session.user.name;
+      } else {
+          // If session.user is unexpectedly null/undefined, create it
+          session.user = {
+              id: token.userId as string | undefined ?? null,
+              name: token.name as string | undefined ?? null,
+              email: (token.userPrincipalName || token.email) as string | undefined ?? null,
+              // image: token.picture as string | undefined ?? null, // If picture is in token
+          };
       }
 
-       // console.log("Session Callback Executed:", { session, token });
+
+       // console.log("[Auth Session Callback] Executed:", { session: { userId: session.userId, error: session.error, hasAccessToken: !!session.accessToken }, token: { userId: token.userId, error: token.error } });
       return session; // Return the modified session object
     },
   },
@@ -261,7 +299,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
    },
 
   // Optional: Enable debug logs in development for more detailed output
-  // debug: process.env.NODE_ENV === 'development',
+  debug: process.env.NODE_ENV === 'development',
 
   // Session configuration (using JWT strategy by default)
   session: {
@@ -273,17 +311,23 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
    // Event listeners (optional) - useful for logging or side effects
    events: {
      async signIn({ user, account, profile, isNewUser }) {
-       // console.log(`Sign In Event: User ${user.id} (${user.email}), Account: ${account?.provider}, New User: ${isNewUser}`);
+        console.log(`[Auth Event] Sign In: User ${user.id} (${user.email}), Account: ${account?.provider}, New User: ${isNewUser}`);
+        if (account?.error) {
+            console.error(`[Auth Event] Sign In Error (Account): ${account.error}`, account);
+        }
      },
      async signOut({ session, token }) {
-       // console.log(`Sign Out Event: User ${token.userId} (${token.email})`);
+       console.log(`[Auth Event] Sign Out: User ${token.userId} (${token.userPrincipalName || token.email})`);
      },
-     // async createUser({ user }) { console.log("Create User Event:", user); },
+     async session({ session, token }) {
+       // Log session creation/update, be cautious about logging sensitive data
+       // console.log(`[Auth Event] Session Updated: User ${session.userId}, Error: ${session.error}`);
+        if (session.error) {
+            console.warn(`[Auth Event] Session Error Propagated: User ${session.userId}, Error: ${session.error}`);
+        }
+     },
+     async createUser({ user }) { console.log("[Auth Event] Create User:", user); },
      // async updateUser({ user }) { console.log("Update User Event:", user); },
      // async linkAccount({ user, account, profile }) { console.log("Link Account Event:", user, account); },
-     // async session({ session, token }) { console.log("Session Event:", session); }, // Be careful logging sensitive session data
    }
 });
-// Removed trailing curly brace that caused the EOF error
-// }
-    
