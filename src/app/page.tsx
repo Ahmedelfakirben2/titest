@@ -1,4 +1,3 @@
-
 'use client';
 
 import * as React from 'react';
@@ -38,9 +37,10 @@ export default function Home() {
       const device = await getDevice(session.accessToken, session.userPrincipalName);
       setHostname(device.hostname);
     } catch (err: any) {
-      console.error("Error fetching device data:", err);
+      // Log the full error object for better debugging, stringifying for potentially more detail
+      console.error("Error fetching device data:", err, JSON.stringify(err, Object.getOwnPropertyNames(err)));
       // Provide more specific error messages if possible
-      if (err.message?.includes('Failed to fetch')) {
+      if (err.message?.includes('Failed to fetch') || err.message?.includes('Network error')) {
           setFetchError("Error de red al intentar conectar con Microsoft Intune. Verifica tu conexión o inténtalo más tarde.");
       } else if (err.message?.includes('401') || err.message?.includes('Unauthorized')) {
          setFetchError("Error de autenticación o permisos insuficientes para acceder a Intune. Por favor, vuelve a iniciar sesión.");
@@ -59,7 +59,7 @@ export default function Home() {
   // Fetch device data when the user is authenticated
   React.useEffect(() => {
     if (status === 'authenticated' && session?.accessToken && session?.userPrincipalName) {
-      // Only fetch if hostname hasn't been successfully fetched yet
+      // Only fetch if hostname hasn't been successfully fetched yet and no error occurred
       if (!hostname && !fetchError) {
         fetchDeviceData();
       }
@@ -223,4 +223,3 @@ export default function Home() {
     </main>
   );
 }
-

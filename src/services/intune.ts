@@ -61,10 +61,11 @@ export async function getDevice(accessToken: string, userPrincipalName: string):
   const graphClient = Client.initWithMiddleware({
     authProvider: authProvider,
      // Configure fetch options if needed (e.g., timeouts)
-     // fetchOptions: { timeout: 15000 } // Example: 15 seconds timeout
+     fetchOptions: { timeout: 15000 } // Example: 15 seconds timeout
   });
 
   try {
+    console.log(`Attempting to fetch managed devices for user: ${userPrincipalName}`);
     // Fetch managed devices for the user. Filter by UPN.
     // Select only necessary fields (id, deviceName, operatingSystem).
     // Order by enrollment date descending to likely get the most recent/primary device first.
@@ -77,12 +78,15 @@ export async function getDevice(accessToken: string, userPrincipalName: string):
       .top(1)                                  // Get only the most recent one
       .get();
 
+    console.log("Graph API Result:", JSON.stringify(result, null, 2));
+
     if (result && result.value && result.value.length > 0) {
       const deviceData = result.value[0];
       if (!deviceData.deviceName) {
           console.warn("Device found but missing deviceName (hostname):", deviceData);
           throw new Error("Se encontró un dispositivo pero no tiene un nombre (hostname) asignado.");
       }
+      console.log(`Device found: ${deviceData.deviceName} (ID: ${deviceData.id})`);
       return {
         id: deviceData.id,
         hostname: deviceData.deviceName,
@@ -90,18 +94,24 @@ export async function getDevice(accessToken: string, userPrincipalName: string):
       };
     } else {
       // No devices found for the user
+      console.warn(`No managed device found for user ${userPrincipalName}`);
       throw new Error(`No managed device found for user ${userPrincipalName}`);
     }
   } catch (error: any) {
-    console.error('Microsoft Graph API Error:', error);
+     // Log the full error object, stringifying for potentially more detail
+    console.error('Microsoft Graph API Error:', error, JSON.stringify(error, Object.getOwnPropertyNames(error)));
     // Improve error handling: Check for specific Graph API error codes/messages
     let errorMessage = 'Failed to fetch device information from Microsoft Intune.';
-    if (error.statusCode === 401 || error.statusCode === 403) {
-      errorMessage = `Unauthorized (401/403): Check API permissions or token validity for user ${userPrincipalName}.`;
+    if (error.isAxiosError || error.name === 'AbortError' || error.message?.includes('fetch')) {
+        errorMessage = `Network error or timeout communicating with Microsoft Graph API: ${error.message}`;
+    } else if (error.statusCode === 401 || error.statusCode === 403) {
+      errorMessage = `Unauthorized (401/403): Check API permissions or token validity for user ${userPrincipalName}. Detail: ${error.message || ''}`;
     } else if (error.statusCode === 404) {
-       errorMessage = `User or device endpoint not found (404) for user ${userPrincipalName}.`;
+       errorMessage = `User or device endpoint not found (404) for user ${userPrincipalName}. Detail: ${error.message || ''}`;
     } else if (error.message) {
-      errorMessage = `Graph API Error: ${error.message}`;
+      // Try to extract more details if available in the error response body
+      const graphErrorDetail = error.body ? JSON.parse(error.body)?.error?.message : '';
+      errorMessage = `Graph API Error: ${error.message}${graphErrorDetail ? ` - ${graphErrorDetail}` : ''}`;
     }
     // Re-throw a more informative error
     throw new Error(errorMessage);
