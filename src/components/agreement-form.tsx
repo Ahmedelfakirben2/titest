@@ -7,20 +7,20 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { AlertCircle, CheckCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2 } from 'lucide-react'; // Added Loader2
 
 interface AgreementFormProps {
   hostname: string;
-  onSubmit: (signed: boolean) => void;
+  onSubmit: (signed: boolean) => void; // Renamed prop for clarity
   isSubmitting: boolean;
 }
 
-export function AgreementForm({ hostname, onSubmit, isSubmitting }: AgreementFormProps) {
+export function AgreementForm({ hostname, onSubmit: handleFormSubmit, isSubmitting }: AgreementFormProps) { // Destructure and rename onSubmit prop
   const [isSigned, setIsSigned] = React.useState(false);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    onSubmit(isSigned);
+    handleFormSubmit(isSigned); // Call the passed onSubmit function
   };
 
   return (
@@ -39,7 +39,7 @@ export function AgreementForm({ hostname, onSubmit, isSubmitting }: AgreementFor
           Me comprometo a utilizar este equipo exclusivamente para fines laborales, siguiendo las políticas de seguridad y uso aceptable de la empresa. Entiendo que soy responsable del cuidado y buen estado del equipo asignado.
         </p>
         <p>
-          Asimismo, me comprometo a devolver el equipo en las mismas condiciones en las que lo recibí (salvo el desgaste normal por uso) al finalizar mi relación laboral con la empresa o cuando esta así lo requiera.
+          Asimismo, me comprometo a devolver el equipo en lasmmas condiciones en las que lo recibí (salvo el desgaste normal por uso) al finalizar mi relación laboral con la empresa o cuando esta así lo requiera.
         </p>
         <div className="flex items-center space-x-3 pt-4">
           <Checkbox
@@ -58,15 +58,12 @@ export function AgreementForm({ hostname, onSubmit, isSubmitting }: AgreementFor
         <form onSubmit={handleSubmit} className="w-full">
           <Button
             type="submit"
-            className="w-full bg-[#2ecc71] hover:bg-[#27ae60] text-white" // Accent Green for Sign button
+            className="w-full bg-accent hover:bg-accent/90 text-accent-foreground" // Use theme accent color
             disabled={!isSigned || isSubmitting}
           >
             {isSubmitting ? (
               <>
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
+                <Loader2 className="animate-spin -ml-1 mr-3 h-5 w-5" />
                 Firmando...
               </>
             ) : (
