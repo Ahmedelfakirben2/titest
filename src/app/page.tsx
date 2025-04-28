@@ -22,8 +22,9 @@ export default function Home() {
   const { toast } = useToast();
 
   const fetchDeviceData = React.useCallback(async () => {
-    if (!session?.accessToken || !session?.userPrincipalName) {
+    if (status !== 'authenticated' || !session?.accessToken || !session?.userPrincipalName) {
       // Don't fetch if not authenticated or required info is missing
+      // This check might be redundant due to the useEffect dependency check, but added for safety.
       setFetchError("Autenticación requerida para obtener datos del dispositivo.");
       return;
     }
@@ -33,19 +34,35 @@ export default function Home() {
     setHostname(null); // Reset hostname on new fetch
 
     try {
+      console.log("Fetching device data with UPN:", session.userPrincipalName);
       // Use the access token and userPrincipalName from the session
       const device = await getDevice(session.accessToken, session.userPrincipalName);
       setHostname(device.hostname);
+      console.log("Device hostname fetched successfully:", device.hostname);
     } catch (err: any) {
-      // Log the full error object for better debugging, stringifying for potentially more detail
-      console.error("Error fetching device data:", err, JSON.stringify(err, Object.getOwnPropertyNames(err)));
-      // Provide more specific error messages if possible
-      if (err.message?.includes('Failed to fetch') || err.message?.includes('Network error')) {
-          setFetchError("Error de red al intentar conectar con Microsoft Intune. Verifica tu conexión o inténtalo más tarde.");
-      } else if (err.message?.includes('401') || err.message?.includes('Unauthorized')) {
-         setFetchError("Error de autenticación o permisos insuficientes para acceder a Intune. Por favor, vuelve a iniciar sesión.");
-      } else if (err.message?.includes('found')) {
-         setFetchError("No se encontró un dispositivo gestionado asignado a tu usuario en Microsoft Intune.");
+      // Log the full error object for better debugging
+      console.error("Error fetching device data:", err);
+      console.error("Error name:", err.name);
+      console.error("Error message:", err.message);
+      console.error("Error stack:", err.stack);
+      // Stringify might help but sometimes misses non-enumerable properties
+      console.error("Error stringified:", JSON.stringify(err, Object.getOwnPropertyNames(err)));
+
+      // Provide more specific error messages
+      if (err instanceof TypeError && err.message === 'Failed to fetch') {
+          // This specific TypeError often indicates a network issue (CORS, DNS, unreachable server)
+          setFetchError("Error de red al intentar conectar con Microsoft Graph API. Verifica tu conexión a internet, la configuración de red/VPN, o si hay un problema temporal con el servicio de Microsoft. Si el problema persiste, contacta a soporte.");
+      } else if (err.message?.includes('Network error') || err.message?.includes('timeout')) {
+          setFetchError(`Error de red o tiempo de espera agotado al conectar con Microsoft Intune (${err.message}). Verifica tu conexión o inténtalo más tarde.`);
+      } else if (err.message?.includes('Unauthorized') || err.message?.includes('401') || err.message?.includes('403')) {
+         setFetchError(`Error de autenticación o permisos (${err.statusCode || 'N/A'}) para acceder a Intune. Por favor, vuelve a iniciar sesión o verifica los permisos de la aplicación. Detalle: ${err.message}`);
+      } else if (err.message?.includes('found') || err.message?.includes('404')) {
+         // Differentiate between 'managed device not found' and 'user not found' if possible based on Graph message
+         if (err.message.includes('User') && err.message.includes('not found')) {
+             setFetchError(`Usuario ${session.userPrincipalName} no encontrado en el directorio (404). Verifica que la cuenta exista.`);
+         } else {
+             setFetchError("No se encontró un dispositivo gestionado asignado a tu usuario en Microsoft Intune (404).");
+         }
       } else {
          // Generic error from Graph or other issues
          setFetchError(`No se pudo obtener la información del dispositivo: ${err.message || 'Error desconocido'}. Inténtalo de nuevo más tarde o contacta a soporte.`);
@@ -54,13 +71,14 @@ export default function Home() {
     } finally {
       setIsLoadingDevice(false);
     }
-  }, [session]); // Dependency: fetchDeviceData updates when session changes
+  }, [session, status]); // Add status to dependency array
 
   // Fetch device data when the user is authenticated
   React.useEffect(() => {
+    // Ensure we only fetch when authenticated and required data is present
     if (status === 'authenticated' && session?.accessToken && session?.userPrincipalName) {
-      // Only fetch if hostname hasn't been successfully fetched yet and no error occurred
-      if (!hostname && !fetchError) {
+      // Only fetch if hostname hasn't been successfully fetched yet, no error occurred, and not currently loading.
+      if (!hostname && !fetchError && !isLoadingDevice) {
         fetchDeviceData();
       }
     } else if (status === 'unauthenticated') {
@@ -70,9 +88,9 @@ export default function Home() {
        setIsLoadingDevice(false);
        setIsSubmitted(false);
     }
-    // Intentionally exclude fetchDeviceData from dependencies here to avoid infinite loop
-    // It's called explicitly when status/session are ready, or on retry.
-  }, [status, session?.accessToken, session?.userPrincipalName, hostname, fetchError]);
+    // Dependencies: Fetch when status changes to authenticated, or session details change.
+    // Include fetchDeviceData, hostname, fetchError, isLoadingDevice to re-run effect if these change.
+  }, [status, session?.accessToken, session?.userPrincipalName, hostname, fetchError, isLoadingDevice, fetchDeviceData]);
 
 
   const handleAgreementSubmit = async (signed: boolean) => {
@@ -146,6 +164,7 @@ export default function Home() {
          <SignOutButton />
        </div>
       <div className="container mx-auto flex flex-col items-center">
+        {/* Show loading skeleton only when actively fetching */}
         {isLoadingDevice && (
           <Card className="w-full max-w-2xl shadow-lg">
             <CardHeader>
@@ -164,6 +183,7 @@ export default function Home() {
           </Card>
         )}
 
+        {/* Show error message when not loading and an error exists */}
         {!isLoadingDevice && fetchError && (
           <div className="w-full max-w-2xl space-y-4 text-center">
             <Alert variant="destructive">
@@ -171,8 +191,8 @@ export default function Home() {
               <AlertTitle>Error al Obtener Dispositivo</AlertTitle>
               <AlertDescription>{fetchError}</AlertDescription>
             </Alert>
-             {/* Allow retry unless it's a 'device not found' or specific auth error */}
-             {!fetchError.includes("No se encontró un dispositivo") && !fetchError.includes("Unauthorized") && !fetchError.includes("401") && !fetchError.includes("403") && (
+             {/* Allow retry unless it's a 'device not found' or specific auth/user error */}
+             {!fetchError.includes("No se encontró un dispositivo") && !fetchError.includes("Unauthorized") && !fetchError.includes("401") && !fetchError.includes("403") && !fetchError.includes("no encontrado en el directorio") && (
                <Button onClick={fetchDeviceData} disabled={isLoadingDevice}>
                  {isLoadingDevice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                  Reintentar
@@ -184,9 +204,16 @@ export default function Home() {
                   Si el problema persiste, intenta <SignOutButton /> y vuelve a iniciar sesión.
                 </div>
                )}
+               {/* Suggest contacting support for user/device not found errors */}
+               {(fetchError.includes("No se encontró un dispositivo") || fetchError.includes("no encontrado en el directorio")) && (
+                   <div className="mt-4 text-sm text-muted-foreground">
+                       Verifica que tu usuario y dispositivo estén correctamente registrados en Intune. Si el problema persiste, contacta a soporte.
+                   </div>
+               )}
           </div>
         )}
 
+        {/* Show agreement form when loading finished, no error, hostname found, and not submitted */}
         {!isLoadingDevice && !fetchError && hostname && !isSubmitted && (
           <AgreementForm
             hostname={hostname}
@@ -195,12 +222,13 @@ export default function Home() {
            />
         )}
 
-         {/* Case where loading finished, no error, but hostname is still null (should be caught by error handling, but as fallback) */}
+         {/* Fallback: Show if loading finished, no error, but no hostname (and not submitted) */}
+         {/* This case might happen if fetchDeviceData completes without error but returns null/undefined unexpectedly */}
          {!isLoadingDevice && !fetchError && !hostname && !isSubmitted && status === 'authenticated' && (
            <Alert className="w-full max-w-2xl">
              <AlertCircle className="h-4 w-4" />
              <AlertTitle>Información no disponible</AlertTitle>
-             <AlertDescription>No se pudo cargar la información del dispositivo. Revisa si tienes un dispositivo asignado en Intune o inténtalo de nuevo.</AlertDescription>
+             <AlertDescription>No se pudo cargar la información del dispositivo. Esto puede ocurrir si no tienes un dispositivo asignado en Intune o hubo un problema inesperado.</AlertDescription>
               <Button onClick={fetchDeviceData} disabled={isLoadingDevice} className="mt-4">
                  {isLoadingDevice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                  Reintentar Carga
@@ -208,10 +236,11 @@ export default function Home() {
            </Alert>
          )}
 
+        {/* Show success message when not loading, no error, and submitted */}
         {!isLoadingDevice && !fetchError && isSubmitted && (
            <Card className="w-full max-w-md shadow-lg text-center p-8">
             <CardHeader>
-                <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
+                <CheckCircle className="h-16 w-16 text-accent mx-auto mb-4" /> {/* Use accent color */}
               <CardTitle className="text-2xl font-semibold">¡Acuerdo Firmado!</CardTitle>
               <CardDescription className="pt-2">
                 Gracias por firmar el acuerdo para el dispositivo <strong className="text-primary">{hostname}</strong>. Se ha registrado correctamente.
@@ -223,3 +252,5 @@ export default function Home() {
     </main>
   );
 }
+
+    
